@@ -27,6 +27,9 @@ private:
     };
 
     void choosePrograms();
+    void chooseDirectory();
+    void directoryScanFinished();
+    int addPrograms(const QStringList &paths);
     void removeSelectedPrograms();
     void clearPrograms();
     void runOperation(Operation operation);
@@ -39,6 +42,7 @@ private:
     QTableWidget *programTable_;
     QTextEdit *logEdit_;
     QPushButton *chooseButton_;
+    QPushButton *chooseDirectoryButton_;
     QPushButton *removeButton_;
     QPushButton *clearButton_;
     QPushButton *startButton_;
@@ -46,6 +50,7 @@ private:
     QPushButton *restartButton_;
     QTimer *monitorTimer_;
     QFutureWatcher<QList<ProcessManager::OperationResult>> operationWatcher_;
+    QFutureWatcher<QStringList> directoryScanWatcher_;
     bool busy_ = false;
 };
 

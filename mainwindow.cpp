@@ -3,6 +3,7 @@
 #include <QAbstractItemView>
 #include <QDateTime>
 #include <QDir>
+#include <QDirIterator>
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QHBoxLayout>
@@ -10,6 +11,8 @@
 #include <QLabel>
 #include <QMessageBox>
 #include <QPushButton>
+#include <QSet>
+#include <QStatusBar>
 #include <QTableWidget>
 #include <QTextEdit>
 #include <QTimer>
@@ -24,6 +27,7 @@ MainWindow::MainWindow(QWidget *parent)
     , programTable_(new QTableWidget(this))
     , logEdit_(new QTextEdit(this))
     , chooseButton_(new QPushButton(QStringLiteral("选择 EXE"), this))
+    , chooseDirectoryButton_(new QPushButton(QStringLiteral("选择文件夹"), this))
     , removeButton_(new QPushButton(QStringLiteral("移除选中"), this))
     , clearButton_(new QPushButton(QStringLiteral("清空列表"), this))
     , startButton_(new QPushButton(QStringLiteral("启动"), this))
@@ -46,6 +50,7 @@ MainWindow::MainWindow(QWidget *parent)
 
     auto *listButtons = new QHBoxLayout;
     listButtons->addWidget(chooseButton_);
+    listButtons->addWidget(chooseDirectoryButton_);
     listButtons->addWidget(removeButton_);
     listButtons->addWidget(clearButton_);
     listButtons->addStretch();
@@ -66,6 +71,7 @@ MainWindow::MainWindow(QWidget *parent)
     setCentralWidget(centralWidget);
 
     connect(chooseButton_, &QPushButton::clicked, this, &MainWindow::choosePrograms);
+    connect(chooseDirectoryButton_, &QPushButton::clicked, this, &MainWindow::chooseDirectory);
     connect(removeButton_, &QPushButton::clicked, this, &MainWindow::removeSelectedPrograms);
     connect(clearButton_, &QPushButton::clicked, this, &MainWindow::clearPrograms);
     connect(startButton_, &QPushButton::clicked, this, [this] { runOperation(Operation::Start); });
@@ -73,6 +79,7 @@ MainWindow::MainWindow(QWidget *parent)
     connect(restartButton_, &QPushButton::clicked, this, [this] { runOperation(Operation::Restart); });
     connect(monitorTimer_, &QTimer::timeout, this, &MainWindow::refreshStatuses);
     connect(&operationWatcher_, &QFutureWatcherBase::finished, this, &MainWindow::operationFinished);
+    connect(&directoryScanWatcher_, &QFutureWatcherBase::finished, this, &MainWindow::directoryScanFinished);
 
     monitorTimer_->start(1000);
     setBusy(false);
@@ -86,12 +93,58 @@ void MainWindow::choosePrograms()
         QString(),
         QStringLiteral("Windows 程序 (*.exe)"));
 
+    addPrograms(files);
+    refreshStatuses();
+    setBusy(false);
+}
+
+void MainWindow::chooseDirectory()
+{
+    const QString directory = QFileDialog::getExistingDirectory(
+        this,
+        QStringLiteral("选择包含 EXE 的文件夹"));
+    if (directory.isEmpty()) {
+        return;
+    }
+
+    setBusy(true);
+    statusBar()->showMessage(QStringLiteral("正在扫描文件夹及其子目录……"));
+    directoryScanWatcher_.setFuture(QtConcurrent::run([directory] {
+        QStringList executablePaths;
+        QDirIterator iterator(directory,
+                              QDir::Files | QDir::Hidden | QDir::System | QDir::NoDotAndDotDot,
+                              QDirIterator::Subdirectories);
+        while (iterator.hasNext()) {
+            const QString path = iterator.next();
+            if (QFileInfo(path).suffix().compare(QStringLiteral("exe"), Qt::CaseInsensitive) == 0) {
+                executablePaths.append(QFileInfo(path).absoluteFilePath());
+            }
+        }
+        executablePaths.sort(Qt::CaseInsensitive);
+        return executablePaths;
+    }));
+}
+
+void MainWindow::directoryScanFinished()
+{
+    const QStringList paths = directoryScanWatcher_.result();
+    const int addedCount = addPrograms(paths);
+    setBusy(false);
+    refreshStatuses();
+    statusBar()->showMessage(
+        QStringLiteral("扫描完成：找到 %1 个 EXE，新增 %2 个").arg(paths.size()).arg(addedCount),
+        5000);
+}
+
+int MainWindow::addPrograms(const QStringList &paths)
+{
     QSet<QString> existingPaths;
     for (const QString &path : selectedPaths()) {
         existingPaths.insert(QDir::cleanPath(QDir::fromNativeSeparators(path)).toCaseFolded());
     }
 
-    for (const QString &file : files) {
+    int addedCount = 0;
+    for (const QString &file : paths) {
         const QString absolutePath = QFileInfo(file).absoluteFilePath();
         const QString key = QDir::cleanPath(QDir::fromNativeSeparators(absolutePath)).toCaseFolded();
         if (existingPaths.contains(key)) {
@@ -105,10 +158,10 @@ void MainWindow::choosePrograms()
         programTable_->setItem(row, 0, pathItem);
         programTable_->setItem(row, 1, new QTableWidgetItem(QStringLiteral("检测中")));
         existingPaths.insert(key);
+        ++addedCount;
     }
 
-    refreshStatuses();
-    setBusy(false);
+    return addedCount;
 }
 
 void MainWindow::removeSelectedPrograms()
@@ -205,6 +258,7 @@ void MainWindow::setBusy(bool busy, const QString &status)
 {
     busy_ = busy;
     chooseButton_->setEnabled(!busy);
+    chooseDirectoryButton_->setEnabled(!busy);
     removeButton_->setEnabled(!busy && programTable_->rowCount() > 0);
     clearButton_->setEnabled(!busy && programTable_->rowCount() > 0);
     startButton_->setEnabled(!busy && programTable_->rowCount() > 0);

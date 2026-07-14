@@ -3,10 +3,13 @@
 #include <QCoreApplication>
 #include <QDir>
 #include <QElapsedTimer>
+#include <QFile>
 #include <QFileInfo>
 #include <QProcess>
 #include <QSet>
+#include <QtEndian>
 
+#include <cstring>
 #include <iterator>
 
 #ifdef Q_OS_WIN
@@ -23,6 +26,44 @@ struct RunningProcess
     QString path;
     DWORD processId;
 };
+
+bool isConsoleExecutable(const QString &path)
+{
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly)) {
+        return false;
+    }
+
+    const QByteArray dosHeader = file.read(64);
+    if (dosHeader.size() < 64 || dosHeader.at(0) != 'M' || dosHeader.at(1) != 'Z') {
+        return false;
+    }
+
+    const auto *dosData = reinterpret_cast<const uchar *>(dosHeader.constData());
+    const quint32 peOffset = qFromLittleEndian<quint32>(dosData + 0x3c);
+    constexpr qint64 minimumPeHeaderSize = 4 + 20 + 70;
+    if (file.size() < static_cast<qint64>(peOffset) + minimumPeHeaderSize
+        || !file.seek(peOffset)) {
+        return false;
+    }
+
+    const QByteArray peHeader = file.read(minimumPeHeaderSize);
+    if (peHeader.size() < minimumPeHeaderSize
+        || std::memcmp(peHeader.constData(), "PE\0\0", 4) != 0) {
+        return false;
+    }
+
+    const auto *optionalHeader = reinterpret_cast<const uchar *>(peHeader.constData() + 24);
+    const quint16 magic = qFromLittleEndian<quint16>(optionalHeader);
+    if (magic != IMAGE_NT_OPTIONAL_HDR32_MAGIC && magic != IMAGE_NT_OPTIONAL_HDR64_MAGIC) {
+        return false;
+    }
+
+    // PE32 and PE32+ optional headers store Subsystem at the same offset.
+    constexpr int subsystemOffset = 68;
+    const quint16 subsystem = qFromLittleEndian<quint16>(optionalHeader + subsystemOffset);
+    return subsystem == IMAGE_SUBSYSTEM_WINDOWS_CUI;
+}
 
 QString windowsError(const char *functionName, DWORD errorCode)
 {
@@ -133,11 +174,18 @@ QList<ProcessManager::OperationResult> ProcessManager::startPrograms(const QStri
             continue;
         }
 
+        QProcess process;
+        process.setProgram(path);
+        process.setWorkingDirectory(QFileInfo(path).absolutePath());
+        if (isConsoleExecutable(path)) {
+            process.setCreateProcessArgumentsModifier([](QProcess::CreateProcessArguments *arguments) {
+                arguments->flags |= CREATE_NEW_CONSOLE;
+                arguments->startupInfo->dwFlags &= ~STARTF_USESTDHANDLES;
+            });
+        }
+
         qint64 processId = 0;
-        const bool started = QProcess::startDetached(path,
-                                                     QStringList(),
-                                                     QFileInfo(path).absolutePath(),
-                                                     &processId);
+        const bool started = process.startDetached(&processId);
         results.append({path,
                         started,
                         started ? QStringLiteral("启动成功，PID=%1").arg(processId)
