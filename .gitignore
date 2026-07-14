@@ -8,3 +8,4 @@ build/
 debug/
 release/
 *.user
+config.json

@@ -30,6 +30,9 @@ private:
     void chooseDirectory();
     void directoryScanFinished();
     int addPrograms(const QStringList &paths);
+    QString configFilePath() const;
+    void loadPrograms();
+    void savePrograms();
     void removeSelectedPrograms();
     void clearPrograms();
     void runOperation(Operation operation);

@@ -1,16 +1,23 @@
 #include "mainwindow.h"
 
 #include <QAbstractItemView>
+#include <QCoreApplication>
 #include <QDateTime>
 #include <QDir>
 #include <QDirIterator>
+#include <QFile>
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QHBoxLayout>
 #include <QHeaderView>
 #include <QLabel>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QJsonParseError>
 #include <QMessageBox>
 #include <QPushButton>
+#include <QSaveFile>
 #include <QSet>
 #include <QStatusBar>
 #include <QTableWidget>
@@ -81,8 +88,10 @@ MainWindow::MainWindow(QWidget *parent)
     connect(&operationWatcher_, &QFutureWatcherBase::finished, this, &MainWindow::operationFinished);
     connect(&directoryScanWatcher_, &QFutureWatcherBase::finished, this, &MainWindow::directoryScanFinished);
 
+    loadPrograms();
     monitorTimer_->start(1000);
     setBusy(false);
+    refreshStatuses();
 }
 
 void MainWindow::choosePrograms()
@@ -93,7 +102,9 @@ void MainWindow::choosePrograms()
         QString(),
         QStringLiteral("Windows 程序 (*.exe)"));
 
-    addPrograms(files);
+    if (addPrograms(files) > 0) {
+        savePrograms();
+    }
     refreshStatuses();
     setBusy(false);
 }
@@ -134,6 +145,9 @@ void MainWindow::directoryScanFinished()
     statusBar()->showMessage(
         QStringLiteral("扫描完成：找到 %1 个 EXE，新增 %2 个").arg(paths.size()).arg(addedCount),
         5000);
+    if (addedCount > 0) {
+        savePrograms();
+    }
 }
 
 int MainWindow::addPrograms(const QStringList &paths)
@@ -145,7 +159,13 @@ int MainWindow::addPrograms(const QStringList &paths)
 
     int addedCount = 0;
     for (const QString &file : paths) {
-        const QString absolutePath = QFileInfo(file).absoluteFilePath();
+        const QFileInfo fileInfo(file);
+        if (!fileInfo.isFile()
+            || fileInfo.suffix().compare(QStringLiteral("exe"), Qt::CaseInsensitive) != 0) {
+            continue;
+        }
+
+        const QString absolutePath = fileInfo.absoluteFilePath();
         const QString key = QDir::cleanPath(QDir::fromNativeSeparators(absolutePath)).toCaseFolded();
         if (existingPaths.contains(key)) {
             continue;
@@ -164,6 +184,60 @@ int MainWindow::addPrograms(const QStringList &paths)
     return addedCount;
 }
 
+QString MainWindow::configFilePath() const
+{
+    return QDir(QCoreApplication::applicationDirPath()).filePath(QStringLiteral("config.json"));
+}
+
+void MainWindow::loadPrograms()
+{
+    QFile file(configFilePath());
+    if (!file.exists()) {
+        return;
+    }
+    if (!file.open(QIODevice::ReadOnly)) {
+        logEdit_->append(QStringLiteral("[配置] 读取失败：%1").arg(file.errorString()));
+        return;
+    }
+
+    QJsonParseError parseError;
+    const QJsonDocument document = QJsonDocument::fromJson(file.readAll(), &parseError);
+    if (parseError.error != QJsonParseError::NoError || !document.isObject()) {
+        logEdit_->append(QStringLiteral("[配置] JSON 无效：%1").arg(parseError.errorString()));
+        return;
+    }
+
+    QStringList paths;
+    const QJsonArray executableArray = document.object().value(QStringLiteral("executables")).toArray();
+    for (const QJsonValue &value : executableArray) {
+        if (value.isString()) {
+            paths.append(value.toString());
+        }
+    }
+
+    const int addedCount = addPrograms(paths);
+    statusBar()->showMessage(QStringLiteral("已从配置加载 %1 个 EXE").arg(addedCount), 5000);
+}
+
+void MainWindow::savePrograms()
+{
+    QJsonArray executableArray;
+    for (const QString &path : selectedPaths()) {
+        executableArray.append(path);
+    }
+
+    QJsonObject root;
+    root.insert(QStringLiteral("executables"), executableArray);
+    const QByteArray json = QJsonDocument(root).toJson(QJsonDocument::Indented);
+
+    QSaveFile file(configFilePath());
+    if (!file.open(QIODevice::WriteOnly)
+        || file.write(json) != json.size()
+        || !file.commit()) {
+        statusBar()->showMessage(QStringLiteral("配置保存失败：%1").arg(file.errorString()), 5000);
+    }
+}
+
 void MainWindow::removeSelectedPrograms()
 {
     const QModelIndexList selectedRows = programTable_->selectionModel()->selectedRows();
@@ -175,12 +249,19 @@ void MainWindow::removeSelectedPrograms()
     for (int row : rows) {
         programTable_->removeRow(row);
     }
+    if (!rows.isEmpty()) {
+        savePrograms();
+    }
     setBusy(false);
 }
 
 void MainWindow::clearPrograms()
 {
+    const bool hadPrograms = programTable_->rowCount() > 0;
     programTable_->setRowCount(0);
+    if (hadPrograms) {
+        savePrograms();
+    }
     setBusy(false);
 }
 
