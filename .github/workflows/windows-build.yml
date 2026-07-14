@@ -1,0 +1,42 @@
+name: Windows Build
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-windows:
+    runs-on: windows-2022
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v6
+
+      - name: Install Qt
+        uses: jurplel/install-qt-action@v4.3.1
+        with:
+          version: '6.8.*'
+          arch: win64_msvc2022_64
+
+      - name: Build and deploy
+        shell: cmd
+        run: |
+          call "%ProgramFiles%\Microsoft Visual Studio\2022\Enterprise\Common7\Tools\VsDevCmd.bat" -arch=x64
+          mkdir build
+          mkdir dist
+          cd build
+          qmake ..\ExeProcessManager.pro "CONFIG+=release" "CONFIG-=debug" "DESTDIR=..\dist"
+          nmake
+          windeployqt --release --compiler-runtime ..\dist\ExeProcessManager.exe
+          if not exist ..\dist\platforms\qwindows.dll exit /b 1
+
+      - name: Upload Windows artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ExeProcessManager-windows-x64
+          path: dist/
+          if-no-files-found: error

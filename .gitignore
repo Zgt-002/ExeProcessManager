@@ -1,0 +1,10 @@
+.qmake.stash
+Makefile
+*.o
+moc_*.cpp
+moc_predefs.h
+*.app/
+build/
+debug/
+release/
+*.user
