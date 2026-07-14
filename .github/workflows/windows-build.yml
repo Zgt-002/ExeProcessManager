@@ -5,6 +5,10 @@ on:
   pull_request:
   workflow_dispatch:
 
+concurrency:
+  group: windows-build-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
@@ -21,6 +25,8 @@ jobs:
         with:
           version: '6.8.*'
           arch: win64_msvc2022_64
+          cache: true
+          archives: qtbase
 
       - name: Build and deploy
         shell: cmd
