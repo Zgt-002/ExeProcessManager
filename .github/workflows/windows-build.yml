@@ -73,6 +73,7 @@ jobs:
         run: |
           TAG="v1.0.${GITHUB_RUN_NUMBER}"
           gh release create "$TAG" \
+            --repo "$GITHUB_REPOSITORY" \
             ExeProcessManager-windows-x64.zip \
             --target "$GITHUB_SHA" \
             --generate-notes \
