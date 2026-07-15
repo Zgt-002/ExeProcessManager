@@ -45,3 +45,78 @@ jobs:
           name: ExeProcessManager-windows-x64
           path: dist/
           if-no-files-found: error
+
+  release:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+    needs: build-windows
+    runs-on: ubuntu-latest
+
+    permissions:
+      actions: read
+      contents: write
+
+    steps:
+      - name: Download Windows artifact
+        uses: actions/download-artifact@v5
+        with:
+          name: ExeProcessManager-windows-x64
+          path: release-package
+
+      - name: Create release package
+        run: |
+          cd release-package
+          zip -r ../ExeProcessManager-windows-x64.zip .
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="v1.0.${GITHUB_RUN_NUMBER}"
+          gh release create "$TAG" \
+            ExeProcessManager-windows-x64.zip \
+            --target "$GITHUB_SHA" \
+            --generate-notes \
+            --title "$TAG"
+
+  cleanup-artifacts:
+    if: >-
+      always() &&
+      github.event_name != 'pull_request' &&
+      needs.build-windows.result == 'success' &&
+      (needs.release.result == 'success' || needs.release.result == 'skipped')
+    needs:
+      - build-windows
+      - release
+    runs-on: ubuntu-latest
+
+    permissions:
+      actions: write
+      contents: read
+
+    steps:
+      - name: Keep latest two artifacts
+        uses: actions/github-script@v9
+        with:
+          script: |
+            const artifacts = await github.paginate(
+              github.rest.actions.listArtifactsForRepo,
+              {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                name: 'ExeProcessManager-windows-x64',
+                per_page: 100
+              }
+            );
+
+            const activeArtifacts = artifacts
+              .filter(artifact => !artifact.expired)
+              .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+
+            for (const artifact of activeArtifacts.slice(2)) {
+              core.info(`Deleting artifact ${artifact.id}: ${artifact.name}`);
+              await github.rest.actions.deleteArtifact({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                artifact_id: artifact.id
+              });
+            }
