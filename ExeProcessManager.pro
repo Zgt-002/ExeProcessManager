@@ -17,4 +17,5 @@ win32 {
     DEFINES += UNICODE _UNICODE
     CONFIG += windows
     CONFIG -= console
+    RC_ICONS = assets/icon/exe-process-manager-v2.ico
 }
